@@ -1,61 +1,85 @@
 import pandas as pd
+import argparse
+import os
+import warnings
 
-# ---------------------------------------------------------
-# Step 1: Simulate Test Execution Data
-# In reality, you would read this from your test framework:
-# df = pd.read_csv('daily_regression_results.csv')
-# ---------------------------------------------------------
-dummy_data = {
-    'TestCase_ID': [
-        'TC_RRC_Setup_01', 'TC_RRC_Setup_01', 'TC_RRC_Setup_01', 'TC_RRC_Setup_01',
-        'TC_Handover_Inter_CU', 'TC_Handover_Inter_CU', 'TC_Handover_Inter_CU', 'TC_Handover_Inter_CU',
-        'TC_NGAP_Paging_03', 'TC_NGAP_Paging_03', 'TC_NGAP_Paging_03', 'TC_NGAP_Paging_03'
-    ],
-    'gNB_Build': [
-        'Build_101', 'Build_102', 'Build_103', 'Build_104',
-        'Build_101', 'Build_102', 'Build_103', 'Build_104',
-        'Build_101', 'Build_102', 'Build_103', 'Build_104'
-    ],
-    'Status': [
-        'Pass', 'Pass', 'Pass', 'Pass',         # Stable Test
-        'Pass', 'Fail', 'Pass', 'Fail',         # Flaky Test (Simulator issue?)
-        'Pass', 'Pass', 'Fail', 'Fail'          # Hard Bug introduced in Build 103
-    ]
-}
+def load_and_merge_data(input_file, history_file, window):
+    # Read the new daily results
+    try:
+        daily_df = pd.read_csv(input_file)
+    except Exception as e:
+        print(f"Error reading input file {input_file}: {e}")
+        return pd.DataFrame()
 
-# Load data into a Pandas DataFrame
-df = pd.DataFrame(dummy_data)
+    # We expect columns like TestCase_ID, gNB_Build, Status
+    if not all(col in daily_df.columns for col in ['TestCase_ID', 'gNB_Build', 'Status']):
+        print("Error: Input CSV must contain 'TestCase_ID', 'gNB_Build', and 'Status' columns.")
+        return pd.DataFrame()
 
-# ---------------------------------------------------------
-# Step 2: Create the Heatmap Grid (Pivot Table)
-# Rows = Test Cases | Columns = Builds | Values = Status
-# ---------------------------------------------------------
-heatmap_df = df.pivot(index='TestCase_ID', columns='gNB_Build', values='Status')
+    # Pivot the daily data: Rows=TestCase, Cols=Build, Values=Status
+    daily_pivot = daily_df.pivot(index='TestCase_ID', columns='gNB_Build', values='Status')
 
-# ---------------------------------------------------------
-# Step 3: Calculate the "Flakiness Score"
-# ---------------------------------------------------------
+    # Read historical data if it exists
+    if os.path.exists(history_file):
+        try:
+            history_df = pd.read_csv(history_file, index_col='TestCase_ID')
+        except Exception as e:
+            print(f"Error reading history file {history_file}: {e}. Starting fresh.")
+            history_df = pd.DataFrame()
+    else:
+        history_df = pd.DataFrame()
+
+    # Merge history with new data
+    if not history_df.empty:
+        # Suppress FutureWarnings during DataFrame combination
+        with warnings.catch_warnings():
+            warnings.simplefilter(action='ignore', category=FutureWarning)
+            # Update existing tests and add new ones (columns will also expand for new builds)
+            merged_df = history_df.combine_first(daily_pivot)
+    else:
+        merged_df = daily_pivot
+
+    # Enforce rolling window: keep only the last `window` builds (columns)
+    # Sorting columns assuming build strings are sortable chronologically (e.g. Build_101, Build_102)
+    sorted_columns = sorted(merged_df.columns.astype(str))
+    merged_df = merged_df[sorted_columns[-window:]]
+    
+    # Save the updated history for the next run
+    merged_df.to_csv(history_file)
+    
+    return merged_df
+
 def evaluate_flakiness(row):
-    statuses = row.dropna().unique()
-    if 'Pass' in statuses and 'Fail' in statuses:
-        # If it flipped back and forth, it's flaky
-        if list(row).count('Pass') > 0 and list(row).count('Fail') > 0 and row.iloc[-1] == 'Pass':
-            return 'High (Flaky)'
-        # If it was passing, but failed recently and stayed failed, it's a real bug
-        return 'Recent Hard Fail'
-    elif 'Fail' in statuses:
-        return 'Persistent Fail'
-    return 'Stable'
+    # Drop NaN values (builds where the test did not run)
+    runs = row.dropna()
+    if runs.empty:
+        return 'No Data'
+    
+    statuses = runs.unique()
+    
+    # If it's all same
+    if len(statuses) == 1:
+        return 'Stable' if statuses[0] == 'Pass' else 'Persistent Fail'
+    
+    # Calculate transitions
+    # Shift array by 1 and compare to original to see when state changes
+    transitions = (runs != runs.shift()).sum() - 1 
+    
+    last_status = runs.iloc[-1]
+    
+    if transitions >= 2:
+        return 'High (Flaky)'
+    elif transitions == 1:
+        if last_status == 'Fail':
+            return 'Recent Hard Fail'
+        else:
+            return 'Fixed (Recent Pass)'
+    
+    return 'Stable' # Fallback
 
-# Add the flakiness status as a new column at the end
-heatmap_df['Diagnosis'] = heatmap_df.apply(evaluate_flakiness, axis=1)
-
-# ---------------------------------------------------------
-# Step 4: Apply Color Coding to the HTML
-# ---------------------------------------------------------
 def color_cells(val):
     color = ''
-    if val == 'Pass': 
+    if val == 'Pass' or val == 'Fixed (Recent Pass)': 
         color = '#c8e6c9' # Light Green
     elif val == 'Fail': 
         color = '#ffcdd2' # Light Red
@@ -68,33 +92,54 @@ def color_cells(val):
     
     return f'background-color: {color}; color: black; text-align: center; border: 1px solid #ddd;' if color else ''
 
-# Apply the styles
-styled_df = heatmap_df.style.map(color_cells)
+def generate_report(heatmap_df, output_file):
+    if heatmap_df.empty:
+        print("No data available to generate the report.")
+        return
 
-# Add some basic CSS for the overall table structure
-html_output = f"""
-<html>
-<head>
-    <style>
-        body {{ font-family: Arial, sans-serif; padding: 20px; }}
-        h2 {{ color: #333; }}
-        table {{ border-collapse: collapse; width: 100%; }}
-        th {{ background-color: #f2f2f2; padding: 10px; text-align: center; border: 1px solid #ddd; }}
-        td {{ padding: 10px; font-weight: bold; }}
-    </style>
-</head>
-<body>
-    <h2>gNB Daily Regression - Flakiness Heatmap</h2>
-    <p>This report highlights which test failures are likely real bugs vs. simulator flakiness.</p>
-    {styled_df.to_html()}
-</body>
-</html>
-"""
+    # Add diagnosis column
+    diagnosis_df = heatmap_df.copy()
+    diagnosis_df['Diagnosis'] = diagnosis_df.apply(evaluate_flakiness, axis=1)
 
-# ---------------------------------------------------------
-# Step 5: Save to an HTML file
-# ---------------------------------------------------------
-with open('regression_heatmap.html', 'w') as f:
-    f.write(html_output)
+    # Apply styles using map (Pandas 2.1+) or applymap (older Pandas)
+    try:
+        styled_df = diagnosis_df.style.map(color_cells)
+    except AttributeError:
+        styled_df = diagnosis_df.style.applymap(color_cells)
 
-print("✅ Success! Open 'regression_heatmap.html' in your web browser to see the dashboard.")
+    html_output = f"""
+    <html>
+    <head>
+        <style>
+            body {{ font-family: Arial, sans-serif; padding: 20px; }}
+            h2 {{ color: #333; }}
+            table {{ border-collapse: collapse; width: 100%; }}
+            th {{ background-color: #f2f2f2; padding: 10px; text-align: center; border: 1px solid #ddd; }}
+            td {{ padding: 10px; font-weight: bold; }}
+        </style>
+    </head>
+    <body>
+        <h2>gNB Daily Regression - Flakiness Heatmap</h2>
+        <p>This report highlights which test failures are likely real bugs vs. simulator flakiness.</p>
+        <p><strong>Note:</strong> Data is merged with historical executions.</p>
+        {styled_df.to_html()}
+    </body>
+    </html>
+    """
+    
+    with open(output_file, 'w') as f:
+        f.write(html_output)
+        
+    print(f"✅ Success! Report generated at '{output_file}'.")
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Generate a regression test flakiness heatmap.")
+    parser.add_argument('--input', type=str, required=True, help="Path to the latest daily test results CSV.")
+    parser.add_argument('--history', type=str, default="historical_data.csv", help="Path to the running historical data CSV.")
+    parser.add_argument('--output', type=str, default="regression_heatmap.html", help="Path to save the generated HTML output.")
+    parser.add_argument('--window', type=int, default=14, help="Number of latest builds to track in history (default 14).")
+    
+    args = parser.parse_args()
+    
+    merged_history = load_and_merge_data(args.input, args.history, args.window)
+    generate_report(merged_history, args.output)
