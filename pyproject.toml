@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "regression-flakiness-scorer"
+version = "0.1.0"
+description = "Identifies flaky tests via historical heatmaps and state transition scoring"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.9"
+authors = [
+    {name = "gbvk312"}
+]
+keywords = ["telecom", "5g", "testing", "flakiness", "regression"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Telecommunications Industry",
+    "Topic :: Software Development :: Testing",
+]
+dependencies = [
+    "pandas>=1.5",
+    "jinja2>=3.0",
+]
+
+[project.scripts]
+flakiness-scorer = "generate_heatmap:main"
+
+[tool.setuptools.py-modules]
+modules = ["generate_heatmap"]
