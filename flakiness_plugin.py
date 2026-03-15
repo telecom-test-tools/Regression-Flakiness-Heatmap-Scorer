@@ -22,7 +22,6 @@ from ttt.plugin import TTTPlugin
 
 def _load_and_merge_data(input_file: str, history_file: str, window: int):
     """Load daily CSV, merge with historical data, enforce rolling window."""
-    import pandas as pd
 
     try:
         daily_df = pd.read_csv(input_file)
@@ -139,7 +138,6 @@ class FlakinessPlugin(TTTPlugin):
 
     def run(self, context: PipelineContext) -> AnalysisResult:
         try:
-            import pandas as pd
         except ImportError:
             return AnalysisResult(
                 tool_name="flakiness-scorer",
@@ -239,7 +237,6 @@ class FlakinessPlugin(TTTPlugin):
         self, results: List[TestResult], output_dir: str
     ) -> str:
         """Convert upstream TestResult objects into a CSV for the heatmap."""
-        import pandas as pd
 
         rows = []
         build_label = "Build_latest"
