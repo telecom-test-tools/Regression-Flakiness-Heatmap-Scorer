@@ -29,5 +29,22 @@ dependencies = [
 [project.scripts]
 flakiness-scorer = "generate_heatmap:main"
 
+[project.entry-points."ttt.plugins"]
+flakiness-scorer = "flakiness_plugin:FlakinessPlugin"
+
 [tool.setuptools.py-modules]
-modules = ["generate_heatmap"]
+modules = ["generate_heatmap", "flakiness_plugin"]
+
+
+[tool.black]
+line-length = 88
+target-version = ['py39']
+
+[tool.isort]
+profile = "black"
+line_length = 88
+
+[tool.mypy]
+python_version = "3.9"
+strict = true
+ignore_missing_imports = true
